@@ -13,7 +13,12 @@ const {
   deleteParticipant,
   batchUpdateParticipants,
   getRecruitmentAnalytics,
+  getRecruitmentConfig,
 } = require('../controller/recruitments/recruitment.controller');
+const { ALLOWED_DEGREES } = require('../utils/recruitment.constants');
+
+// 0. GET /api/recruitment/config - Config properties for recruitment
+router.get('/config', getRecruitmentConfig);
 
 // 1. GET /api/recruitment/analytics - Recruitment demographic & funnel analytics
 router.get('/analytics', getRecruitmentAnalytics);
@@ -69,7 +74,14 @@ router.post(
     body('degreeWithBranch')
       .trim()
       .notEmpty()
-      .withMessage('Degree and branch is required'),
+      .withMessage('Degree and branch is required')
+      .custom((value) => {
+        const validCanonical = ALLOWED_DEGREES.some((d) => value.startsWith(d));
+        if (!validCanonical) {
+          throw new Error('Invalid degree format');
+        }
+        return true;
+      }),
 
     body('submissionTime')
       .optional()

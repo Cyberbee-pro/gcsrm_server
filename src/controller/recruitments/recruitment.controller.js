@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { connectRecruitmentDB } = require('../../utils/db');
 const getParticipantUserModel = require('../../models/recruitment.model');
 const Sentry = require('@sentry/node');
+const { ALLOWED_DEGREES } = require('../../utils/recruitment.constants');
 
 /**
  * Get all recruitment participants with advanced filtering, search, pagination, and sorting
@@ -545,6 +546,24 @@ const getRecruitmentAnalytics = async (req, res, next) => {
   }
 };
 
+const getRecruitmentConfig = async (req, res, next) => {
+  try {
+    return res.status(200).json({
+      success: true,
+      data: {
+        degrees: ALLOWED_DEGREES,
+      },
+    });
+  } catch (error) {
+    Sentry.captureException(error);
+    console.error('Error fetching recruitment config:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch recruitment config',
+    });
+  }
+};
+
 module.exports = {
   getAllParticipants,
   getParticipantById,
@@ -554,4 +573,5 @@ module.exports = {
   deleteParticipant,
   batchUpdateParticipants,
   getRecruitmentAnalytics,
+  getRecruitmentConfig,
 };
