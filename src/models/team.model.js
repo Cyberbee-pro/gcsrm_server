@@ -140,7 +140,6 @@ teamSchema.pre('init', function(doc) {
     }
 });
 
-teamSchema.index({ email: 1 }, { unique: true });
 teamSchema.index({ domain: 1, joined_yr: 1, isCurrentMember: 1 });
 
 const Team = mongoose.models.teams || mongoose.model('teams', teamSchema);
