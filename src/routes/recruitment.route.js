@@ -41,6 +41,7 @@ const {
   onboardMember
 } = require('../controller/recruitments/onboardMember.controller');
 
+const { uploadOnboardingFiles } = require('../middleware/upload.middleware');
 const { teamMemberValidationRules } = require('./team.route');
 
 
@@ -176,7 +177,8 @@ router.post(
 
 router.post(
   '/onboard',
-  requireApiKey,
+  uploadOnboardingFiles,
+  requireOtpAuth,
   teamMemberValidationRules,
   onboardMember
 );

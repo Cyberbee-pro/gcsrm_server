@@ -5,6 +5,7 @@ const { connectDB, connectRecruitmentDB } = require('../../utils/db');
 const teamSchema = require('../../models/team.model');
 const getParticipantUserModel = require('../../models/recruitment.model');
 const { safeErrorMessage } = require('../../utils/regex');
+const { uploadStream } = require('../../utils/cloudinary');
 
 /**
  * Onboard accepted recruitment candidate into GCSRM team collection
@@ -13,7 +14,23 @@ const onboardMember = async (req, res, next) => {
     const startTime = Date.now();
 
     try {
-        // 1. Validate express-validator inputs
+        // 1. Parse stringified JSON fields from FormData if necessary
+        if (typeof req.body.socials === 'string') {
+            try {
+                req.body.socials = JSON.parse(req.body.socials);
+            } catch (e) {
+                req.body.socials = [];
+            }
+        }
+        if (typeof req.body.faDetails === 'string') {
+            try {
+                req.body.faDetails = JSON.parse(req.body.faDetails);
+            } catch (e) {
+                req.body.faDetails = [];
+            }
+        }
+
+        // 2. Validate express-validator inputs
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
             Sentry.captureMessage('Validation errors during candidate onboarding', {
@@ -35,14 +52,22 @@ const onboardMember = async (req, res, next) => {
             });
         }
 
-        // 2. Ensure connection to primary DB (for teams collection)
+        // 3. Validate presence of required files
+        if (!req.files?.picture?.[0] || !req.files?.nda?.[0]) {
+            return res.status(400).json({
+                success: false,
+                error: 'Both picture and nda files are required'
+            });
+        }
+
+        // 4. Ensure connection to primary DB (for teams collection)
         if (mongoose.connection.readyState !== 1) {
             await connectDB();
         }
 
         const normalizedEmail = String(req.body.email).trim().toLowerCase();
 
-        // 3. Check if team member already exists with this email
+        // 5. Check if team member already exists with this email
         const existingMember = await teamSchema.findOne({ email: normalizedEmail }).lean();
         if (existingMember) {
             return res.status(409).json({
@@ -52,7 +77,7 @@ const onboardMember = async (req, res, next) => {
             });
         }
 
-        // 4. Update recruitment applicant status to 'onboarding' if present in recruitment database
+        // 6. Update recruitment applicant status to 'onboarding' if present in recruitment database
         try {
             const recruitmentConn = await connectRecruitmentDB();
             const ParticipantUser = getParticipantUserModel(recruitmentConn);
@@ -72,14 +97,31 @@ const onboardMember = async (req, res, next) => {
             });
         }
 
-        // 5. Determine display index
+        // 7. Sanitize candidate name for clean Cloudinary IDs
+        const cleanName = String(req.body.name).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+        // 8. Concurrently upload both images to Cloudinary via Promise.all
+        const [pictureUpload, ndaUpload] = await Promise.all([
+            uploadStream(req.files.picture[0].buffer, {
+                folder: 'Team26/PFP',
+                public_id: `${cleanName}_pfp`,
+                overwrite: true
+            }),
+            uploadStream(req.files.nda[0].buffer, {
+                folder: 'Team26/NDA',
+                public_id: `${cleanName}_nda`,
+                overwrite: true
+            })
+        ]);
+
+        // 9. Determine display index
         let memberIndex = req.body.index;
         if (memberIndex == null) {
             const maxMember = await teamSchema.findOne().sort({ index: -1 }).lean();
             memberIndex = (maxMember?.index != null ? maxMember.index : -1) + 1;
         }
 
-        // 6. Build team member document
+        // 10. Build team member document
         const memberData = {
             index: memberIndex,
             name: req.body.name.trim(),
@@ -92,10 +134,10 @@ const onboardMember = async (req, res, next) => {
             position: req.body.position,
             caption: req.body.caption ? req.body.caption.trim() : undefined,
             joined_yr: req.body.joined_yr,
-            pictureUrl: req.body.pictureUrl ? req.body.pictureUrl.trim() : undefined,
+            pictureUrl: pictureUpload.secure_url,
             isCurrentMember: req.body.isCurrentMember !== undefined ? req.body.isCurrentMember : true,
             socials: Array.isArray(req.body.socials) ? req.body.socials : [],
-            ndaUrl: req.body.ndaUrl ? req.body.ndaUrl.trim() : undefined
+            ndaUrl: ndaUpload.secure_url
         };
 
         const newMember = new teamSchema(memberData);

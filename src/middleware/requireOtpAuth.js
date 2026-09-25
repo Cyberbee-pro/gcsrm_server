@@ -18,6 +18,11 @@ function requireOtpAuth(req, res, next) {
         });
     }
 
+    // Allow admin/service key pass-through for administrative operations
+    if (process.env.SERVICE_API_KEY && token === process.env.SERVICE_API_KEY) {
+        return next();
+    }
+
     let decoded;
     try {
         decoded = verifyToken(token);
