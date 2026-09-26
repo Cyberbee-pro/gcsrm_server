@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Sentry = require('@sentry/node');
 const { validationResult } = require('express-validator');
@@ -5,13 +6,14 @@ const { connectDB, connectRecruitmentDB } = require('../../utils/db');
 const teamSchema = require('../../models/team.model');
 const getParticipantUserModel = require('../../models/recruitment.model');
 const { safeErrorMessage } = require('../../utils/regex');
-const { uploadStream } = require('../../utils/cloudinary');
+const { uploadStream, cloudinary } = require('../../utils/cloudinary');
 
 /**
  * Onboard accepted recruitment candidate into GCSRM team collection
  */
 const onboardMember = async (req, res, next) => {
     const startTime = Date.now();
+    const uploadedPublicIds = [];
 
     try {
         // 1. Parse stringified JSON fields from FormData if necessary
@@ -77,42 +79,43 @@ const onboardMember = async (req, res, next) => {
             });
         }
 
-        // 6. Update recruitment applicant status to 'onboarding' if present in recruitment database
-        try {
-            const recruitmentConn = await connectRecruitmentDB();
-            const ParticipantUser = getParticipantUserModel(recruitmentConn);
-            const applicant = await ParticipantUser.findOne({ email: normalizedEmail });
-            if (applicant) {
-                applicant.status = 'onboarding';
-                await applicant.save();
-                Sentry.logger.info('Updated recruitment applicant status to onboarding', {
-                    applicantId: applicant._id.toString(),
-                    email: normalizedEmail
-                });
-            }
-        } catch (dbErr) {
-            // Non-critical: log and proceed with team member insertion
-            Sentry.captureException(dbErr, {
-                tags: { operation: 'onboardMember_updateApplicantStatus' }
+        // 6. Strictly authorize applicant: must exist in recruitment DB with status in ['accepted', 'onboarding']
+        const recruitmentConn = await connectRecruitmentDB();
+        const ParticipantUser = getParticipantUserModel(recruitmentConn);
+        const applicant = await ParticipantUser.findOne({ email: normalizedEmail });
+
+        const ELIGIBLE_STATUSES = ['accepted', 'onboarding'];
+        if (!applicant || !ELIGIBLE_STATUSES.includes(applicant.status)) {
+            return res.status(403).json({
+                success: false,
+                error: 'Applicant is not eligible for onboarding'
             });
         }
 
-        // 7. Sanitize candidate name for clean Cloudinary IDs
-        const cleanName = String(req.body.name).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        // 7. Generate collision-proof Cloudinary public IDs using applicant identifier and random bytes
+        const applicantIdentifier = applicant.registrationNumber || applicant.regNo || applicant._id.toString();
+        const cleanId = String(applicantIdentifier).trim().replace(/[^a-z0-9_-]/gi, '_');
+        const randomSuffix = crypto.randomBytes(4).toString('hex');
 
-        // 8. Concurrently upload both images to Cloudinary via Promise.all
+        const picturePublicId = `${cleanId}_pfp_${randomSuffix}`;
+        const ndaPublicId = `${cleanId}_nda_${randomSuffix}`;
+
+        // 8. Concurrently upload both images to Cloudinary with overwrite: false
         const [pictureUpload, ndaUpload] = await Promise.all([
             uploadStream(req.files.picture[0].buffer, {
                 folder: 'Team26/PFP',
-                public_id: `${cleanName}_pfp`,
-                overwrite: true
+                public_id: picturePublicId,
+                overwrite: false
             }),
             uploadStream(req.files.nda[0].buffer, {
                 folder: 'Team26/NDA',
-                public_id: `${cleanName}_nda`,
-                overwrite: true
+                public_id: ndaPublicId,
+                overwrite: false
             })
         ]);
+
+        if (pictureUpload?.public_id) uploadedPublicIds.push(pictureUpload.public_id);
+        if (ndaUpload?.public_id) uploadedPublicIds.push(ndaUpload.public_id);
 
         // 9. Determine display index
         let memberIndex = req.body.index;
@@ -143,6 +146,14 @@ const onboardMember = async (req, res, next) => {
         const newMember = new teamSchema(memberData);
         const savedMember = await newMember.save();
 
+        // 11. Update applicant status ONLY after Team document has successfully persisted
+        applicant.status = 'onboarding';
+        await applicant.save();
+        Sentry.logger.info('Updated recruitment applicant status to onboarding', {
+            applicantId: applicant._id.toString(),
+            email: normalizedEmail
+        });
+
         const totalDuration = Date.now() - startTime;
 
         Sentry.logger.info('Candidate onboarded successfully into team', {
@@ -162,6 +173,22 @@ const onboardMember = async (req, res, next) => {
 
     } catch (err) {
         const totalDuration = Date.now() - startTime;
+
+        // Compensation: purge uploaded Cloudinary assets if downstream operation or DB save fails
+        if (uploadedPublicIds.length > 0) {
+            try {
+                await Promise.allSettled(
+                    uploadedPublicIds.map(id => cloudinary.uploader.destroy(id))
+                );
+                Sentry.logger.info('Compensated: deleted Cloudinary assets after onboarding failure', {
+                    publicIds: uploadedPublicIds
+                });
+            } catch (cleanupErr) {
+                Sentry.captureException(cleanupErr, {
+                    tags: { operation: 'onboardMember_cleanupCloudinary' }
+                });
+            }
+        }
 
         Sentry.logger.error('Failed to onboard candidate', {
             operation: 'onboardMember',
