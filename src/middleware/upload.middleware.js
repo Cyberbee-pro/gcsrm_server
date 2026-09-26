@@ -36,6 +36,32 @@ const uploadOnboardingFiles = multerInstance.fields([
   { name: 'nda', maxCount: 1 },
 ]);
 
+/**
+ * Middleware to parse stringified JSON array fields from multipart/form-data
+ * (socials and faDetails) into JavaScript arrays before express-validator runs.
+ */
+const parseOnboardingJsonFields = (req, res, next) => {
+  if (req.body) {
+    if (typeof req.body.socials === 'string') {
+      try {
+        req.body.socials = JSON.parse(req.body.socials);
+      } catch (err) {
+        // Leave as string so express-validator captures invalid format
+      }
+    }
+
+    if (typeof req.body.faDetails === 'string') {
+      try {
+        req.body.faDetails = JSON.parse(req.body.faDetails);
+      } catch (err) {
+        // Leave as string so express-validator captures invalid format
+      }
+    }
+  }
+  next();
+};
+
 module.exports = {
   uploadOnboardingFiles,
+  parseOnboardingJsonFields,
 };

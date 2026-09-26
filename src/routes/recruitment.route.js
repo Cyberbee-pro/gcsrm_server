@@ -41,7 +41,10 @@ const {
   onboardMember
 } = require('../controller/recruitments/onboardMember.controller');
 
-const { uploadOnboardingFiles } = require('../middleware/upload.middleware');
+const {
+  uploadOnboardingFiles,
+  parseOnboardingJsonFields
+} = require('../middleware/upload.middleware');
 const { teamMemberValidationRules } = require('./team.route');
 
 
@@ -178,6 +181,7 @@ router.post(
 router.post(
   '/onboard',
   uploadOnboardingFiles,
+  parseOnboardingJsonFields,
   requireOtpAuth,
   teamMemberValidationRules,
   onboardMember
