@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Sentry = require('@sentry/node');
 const { validationResult } = require('express-validator');
@@ -92,25 +91,24 @@ const onboardMember = async (req, res, next) => {
             });
         }
 
-        // 7. Generate collision-proof Cloudinary public IDs using applicant identifier and random bytes
-        const applicantIdentifier = applicant.registrationNumber || applicant.regNo || applicant._id.toString();
-        const cleanId = String(applicantIdentifier).trim().replace(/[^a-z0-9_-]/gi, '_');
-        const randomSuffix = crypto.randomBytes(4).toString('hex');
+        // 7. Generate Cloudinary public IDs using sanitized name
+        const rawName = (req.body.name || applicant.name || 'member').trim().toLowerCase();
+        const sanitizedName = rawName.replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '');
 
-        const picturePublicId = `${cleanId}_pfp_${randomSuffix}`;
-        const ndaPublicId = `${cleanId}_nda_${randomSuffix}`;
+        const picturePublicId = `${sanitizedName}_pfp`;
+        const ndaPublicId = `${sanitizedName}_nda`;
 
-        // 8. Concurrently upload both images to Cloudinary with overwrite: false
+        // 8. Concurrently upload both images to Cloudinary with overwrite: true
         const [pictureUpload, ndaUpload] = await Promise.all([
             uploadStream(req.files.picture[0].buffer, {
                 folder: 'Team26/PFP',
                 public_id: picturePublicId,
-                overwrite: false
+                overwrite: true
             }),
             uploadStream(req.files.nda[0].buffer, {
                 folder: 'Team26/NDA',
                 public_id: ndaPublicId,
-                overwrite: false
+                overwrite: true
             })
         ]);
 
